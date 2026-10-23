@@ -22,6 +22,30 @@ pub struct Spidev {
     fd: std::os::fd::OwnedFd,
 }
 
+// Keep the daemon buildable on development hosts, where the board's SPI bus is absent.
+#[cfg(not(target_os = "linux"))]
+pub struct Spidev;
+
+#[cfg(not(target_os = "linux"))]
+impl Spidev {
+    pub fn open(_path: &std::path::Path) -> io::Result<Self> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "the NFC SPI bus is only available on Linux",
+        ))
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+impl Bus for Spidev {
+    fn transfer(&mut self, _tx: &[u8], _rx: &mut [u8]) -> io::Result<()> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "the NFC SPI bus is only available on Linux",
+        ))
+    }
+}
+
 #[cfg(target_os = "linux")]
 mod ioctl {
     // From linux/spi/spidev.h: `_IOW('k', nr, type)` = 0x40000000 | size << 16 | 'k' << 8 | nr.
