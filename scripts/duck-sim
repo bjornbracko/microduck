@@ -206,20 +206,34 @@ build_daemons() {
 # A `policies/` beside the repo wins if it has one: that is somebody's own set, and fetching over
 # it would silently swap the gait they are working on.
 policies() {
-    if [ -f "$REPO/policies/alpha_stand.onnx" ]; then
+    if [ -f "$REPO/policies/velstand.onnx" ] || [ -f "$REPO/policies/alpha_stand.onnx" ]; then
+        [ -f "$REPO/policies/velstand.onnx" ] ||
+            die "the local policies/ set needs velstand.onnx, the robot's default gait; leaving your set untouched."
         POLICIES="$REPO/policies"
         return 0
     fi
     POLICIES="$STATE/policies/current"
-    [ -f "$POLICIES/alpha_stand.onnx" ] || {
+    [ -f "$POLICIES/velstand.onnx" ] || {
         say "no policy set here — fetching the official one"
         sh "$REPO/scripts/seed-policies.sh" "$STATE/policies" || true
     }
-    [ -f "$POLICIES/alpha_stand.onnx" ] ||
+    [ -f "$POLICIES/velstand.onnx" ] ||
         die "no policy set in $STATE/policies. It needs the network once, or your own .onnx files in $REPO/policies."
 }
 
 up() {
+    mode="${DUCK_SIM_MODE:-walk}"
+    case "$mode" in
+        walk) gait=velstand.onnx; ground_pick=alpha_ground_pick.onnx; head_filter=0.5; legs_filter=0.7; idle_enabled=true ;;
+        roller)
+            gait=roller.onnx; ground_pick=roller_crouch.onnx
+            SCENE="${SCENE:-rollers}"
+            export DUCK_SIM_KEYFRAME="${DUCK_SIM_KEYFRAME:-HOME}"
+            [ "$DUCKS" = 1 ] || die "the roller preset currently supports one duck"
+            head_filter=1.0; legs_filter=1.0; idle_enabled=false
+            ;;
+        *) die "DUCK_SIM_MODE must be walk or roller" ;;
+    esac
     [ -d "$RL" ] || die "no simulator at $RL. It is the microduck_rl repo — set DUCK_SIM_RL."
     [ -x "$RL/.venv/bin/python" ] || die "$RL has no .venv. Run \`uv sync\` there first."
     # `.so.<version>` on Linux, `.<version>.dylib` on macOS — the wheel names it after the platform
@@ -233,19 +247,34 @@ up() {
 
     build_daemons
     policies
+    [ -f "$POLICIES/$gait" ] && [ -f "$POLICIES/$ground_pick" ] ||
+        die "the $mode preset needs $gait and $ground_pick in $POLICIES"
 
     # Every policy named explicitly: `RELEASE_DIR` is /opt/robot/daemon/current, which exists on a
     # robot and not here, and `PolicyParams::resolved` uses a named path verbatim when it has one.
     cat > "$STATE/robotd.toml" <<TOML
 [policy]
 enabled = true
-walk = "$POLICIES/alpha_walking.onnx"
-stand = "$POLICIES/alpha_stand.onnx"
+mode = "$mode"
+# The selected body and its gait must agree; tuning defaults follow the mode.
+walk = "$POLICIES/$gait"
+stand = "none"
+# Roller CPU rehearsal follows training without action filtering.
+head_lowpass = $head_filter
+legs_lowpass = $legs_filter
 sitstand = "$POLICIES/alpha_sitstand.onnx"
-ground_pick = "$POLICIES/alpha_ground_pick.onnx"
+ground_pick = "$POLICIES/$ground_pick"
 kick_left = "$POLICIES/ball_kick_left.onnx"
 kick_right = "$POLICIES/ball_kick_right.onnx"
 roulade = "$POLICIES/roulade.onnx"
+
+# The roller gait is balanced with a neutral head; automatic glances can topple it.
+[idle]
+enabled = $idle_enabled
+
+# A laptop runs from the checkout, not the board's /opt/robot/daemon/current release.
+[pickup]
+model = "$REPO/duck-control/models/pickup_detector.onnx"
 
 # Singing is opt-in, and a room full of ducks that will not sing together is a poor demonstration
 # of a room full of ducks. On a real robot this is a decision someone makes; here it is the point.
@@ -276,8 +305,20 @@ TOML
     i=0
     while [ "$i" -lt "$DUCKS" ]; do
         name="$(duck_name "$i")"
+        # Playground installs persist in this file. Refresh the harness defaults without
+        # forgetting those skills (including their nested params) on every restart.
+        saved_skills=""
+        if [ -f "$STATE/robotd-$name.toml" ]; then
+            saved_skills="$(awk '
+                /^[[:space:]]*\[/ { keep = ($0 ~ /^[[:space:]]*\[\[?policy\.skill(\]|\.)/) }
+                keep { print }
+            ' "$STATE/robotd-$name.toml")"
+        fi
         sed -e "s|/sounds/DUCK|/sounds/$name|" -e "s|/DUCK-tof.sock|/$name-tof.sock|" \
             "$STATE/robotd.toml" > "$STATE/robotd-$name.toml"
+        if [ -n "$saved_skills" ]; then
+            printf '\n%s\n' "$saved_skills" >> "$STATE/robotd-$name.toml"
+        fi
         if [ ! -d "$STATE/sounds/$name" ]; then
             say "rendering $name a voice"
             DUCK_IDENTITY="$name" "$REPO/target/debug/sounds" ensure-bank \
@@ -521,7 +562,7 @@ WHY
 
   Your duck is up. From here:
 
-    scripts/duck-sim drive        walk it forward, then stop
+    scripts/duck-sim drive        drive it forward, then stop
     scripts/duck-sim ctl health   or anything else robotctl does
     scripts/duck-sim ctl robot do roulade
     scripts/duck-sim log          what the daemon is saying
@@ -586,15 +627,20 @@ PY
     say "$2 did not stand up (trunk ${trunk}m, standing is about 0.12; gravity z $z)"
     if grep -q "behind real time" "$STATE/body.log" 2>/dev/null; then
         cat <<'WHY'
-  The simulator could not keep real time, and that is almost certainly why. The daemon's loop is
-  wall-clock: if MuJoCo runs at half speed the policy is effectively driving a robot that moves half
-  as fast as it expects, and it cannot balance one. The viewer is the usual cause.
+  The body log contains a real-time delay. That can affect balance, but it does not establish why
+  the duck is down now: init, relax, or a failed move can also leave it on the floor. Check the
+  current simulation speed and robot log first:
+
+    scripts/duck-sim realtime
+    scripts/duck-sim log
+
+  If the simulation is consistently slow, try without the viewer:
 
     scripts/duck-sim down && DUCK_SIM_VIEWER=0 scripts/duck-sim
 WHY
     else
         cat <<'WHY'
-  The simulator kept up, so this is the policy rather than the pacing. Worth a look:
+  Check whether the motors were relaxed, the duck fell, or a move failed:
 
     scripts/duck-sim log                 what the daemon decided
     scripts/duck-sim stand               try again
@@ -720,8 +766,9 @@ wait_for_socket() {
 # into a wall.
 drive() {
     [ -S "$SOCK" ] || die "no duck. \`scripts/duck-sim\` first."
-    say "walking forward for 8 s"
-    python3 - "$SOCK" "${1:-0.15}" "${2:-0.0}" <<'PY'
+    # Both current gaits barely move at 0.15 m/s in the local twin; use a visible demo.
+    say "driving forward for 8 s"
+    python3 - "$SOCK" "${1:-0.3}" "${2:-0.0}" <<'PY'
 import json, socket, sys, time
 sock, vx, vyaw = sys.argv[1], float(sys.argv[2]), float(sys.argv[3])
 s = socket.socket(socket.AF_UNIX); s.connect(sock)

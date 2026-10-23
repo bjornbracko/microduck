@@ -62,7 +62,7 @@ user did not exist, so its unit never started — a class `up` cannot see at all
 ```sh
 scripts/duck-sim                # a MuJoCo window opens, the duck stands up, and it is yours
 scripts/duck-sim status         # health, and whether it is standing
-scripts/duck-sim drive          # walk forward for 8 s (args: vx vyaw, default 0.15 0)
+scripts/duck-sim drive          # forward for 8 s (args: vx vyaw; default 0.3 0)
 scripts/duck-sim ctl health     # anything robotctl does, aimed at this duck
 scripts/duck-sim monitor        # robotctl monitor: joints, IMU, ToF, sticks
 scripts/duck-sim log            # robotd's log
@@ -80,6 +80,14 @@ sockets, which is the only thing that is different from a robot: on a board the 
 To talk to it from your own tools, the sockets are `~/.cache/duck-sim/duck-a.sock` (robotd; `duck.sock`
 is a link to whichever duck `ctl` talks to) and `~/.cache/duck-sim/duck-a-tof.sock`, and the body is
 on TCP port 7801.
+
+For one duck on roller skates, use `DUCK_SIM_MODE=roller scripts/duck-sim up`. This selects
+the roller scene, `HOME` placement, skating gait and crouch policy together. It needs the RL
+body server's roller BAM motor support. The body is steadied through the startup home ramp,
+then released to the policy. Roller actions are unfiltered to match the CPU rehearsal, and
+automatic idle head glances are disabled: those glances toppled the skating policy in the
+local simulator. `drive` requests 0.3 m/s in either mode; both gaits barely moved at 0.15 m/s
+in the local test. Restart with `DUCK_SIM_MODE=walk scripts/duck-sim up` for ordinary feet.
 
 ## Several ducks, each a machine you log into
 
@@ -161,6 +169,7 @@ Environment variables, all optional:
 | `DUCK_SIM_RL` | `~/Pollen/microduck_rl` | Where `duck-body`, the scenes and the ONNX runtime are. |
 | `DUCK_SIM_STATE` | `~/.cache/duck-sim` | Sockets, logs, params, the rootfs and the ducks' overlays. Short on purpose: a unix socket path is capped at about 108 bytes. |
 | `DUCK_SIM_DUCKS` | `1` | How many ducks; `boot N` sets it too. |
+| `DUCK_SIM_MODE` | `walk` | Plain-process `up` preset: `walk` or `roller` (one duck). Selects body, gait and tuning together. |
 | `DUCK_SIM_SCENE` | bare floor | A scene name (`apartment`) or a path. |
 | `DUCK_SIM_CAMERAS` | none | Which ducks render a camera: `a`, `a,c`, `all`. |
 | `DUCK_SIM_DUCK` | `duck-a` | Which duck `ctl` and `monitor` talk to. |
