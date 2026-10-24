@@ -327,7 +327,11 @@ TOML
         i=$((i + 1))
     done
 
-    start_body
+    if [ "$DUCKS" = 1 ] && [ "${DUCK_SIM_CONTROLS:-1}" = 1 ] && [ "${DUCK_SIM_VIEWER:-1}" != 0 ]; then
+        start_body "$STATE/duck-a.sock"
+    else
+        start_body
+    fi
 
     # Depth, before the daemon that reads it. `tofd --sim` asks the simulator for an 8x8 frame at
     # the sensor's own 15 Hz — the same rays a real VL53L5CX would cast, from the model's `tof` site,
@@ -675,15 +679,17 @@ start_body() {
     # `DUCK_SIM_VIEWER=0` for a window-less run: watching costs frames, and the daemon's loop is
     # wall-clock, so a simulator that cannot keep up is a robot that cannot balance.
     [ "${DUCK_SIM_VIEWER:-1}" = 0 ] && HEADLESS=--headless || HEADLESS=
-    # **The viewer needs `mjpython` on macOS.** MuJoCo's passive viewer has to own the main thread
-    # and the Cocoa event loop, so `launch_passive` refuses under a plain interpreter — the body
-    # server catches that and runs headless, which is a window that never opens and no error to
-    # explain it. `mjpython` is the launcher the wheel ships for exactly this. Linux has no such
-    # rule, and asking for headless has nothing to launch either way.
+    # The native control window owns GLFW on Python's main thread. The passive viewer instead
+    # needs mjpython on macOS, where its Cocoa loop has to own that thread.
+    # A generated app bundle gives the native window its own identity and venv libraries.
     PY_BIN="$RL/.venv/bin/python"
-    if [ -z "$HEADLESS" ] && [ "$(uname -s)" = Darwin ] && [ -x "$RL/.venv/bin/mjpython" ]; then
+    if [ "$#" = 0 ] && [ -z "$HEADLESS" ] && [ "$(uname -s)" = Darwin ] && [ -x "$RL/.venv/bin/mjpython" ]; then
         PY_BIN="$RL/.venv/bin/mjpython"
     fi
+    if [ "$#" -gt 0 ] && [ "$(uname -s)" = Darwin ]; then
+        PY_BIN="$("$RL/.venv/bin/python" -m mjlab_microduck.sim.macos_app "$STATE")"
+    fi
+    if [ "$#" -gt 0 ]; then set -- --control-socket "$1"; fi
     # **Backgrounded directly, and in its own session.** `( cd X && nohup cmd & echo $! )` records
     # the *subshell's* pid, because `A && B & C` parses as `(A && B) & C` — so `down` killed a
     # wrapper and left MuJoCo running as an orphan. `setsid` puts the simulator in its own process
@@ -713,7 +719,7 @@ start_body() {
     # shellcheck disable=SC2086
     $SETSID nohup "$PY_BIN" -m mjlab_microduck.sim.body_server \
         --port "$PORT" --ducks "$DUCKS" --keyframe "${DUCK_SIM_KEYFRAME:-SIT}" $HEADLESS $scene_arg \
-        $cam_args \
+        $cam_args "$@" \
         > "$STATE/body.log" 2>&1 &
     echo $! > "$STATE/body.pid"
     if ! wait_for_port; then

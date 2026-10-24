@@ -81,6 +81,17 @@ To talk to it from your own tools, the sockets are `~/.cache/duck-sim/duck-a.soc
 is a link to whichever duck `ctl` talks to) and `~/.cache/duck-sim/duck-a-tof.sock`, and the body is
 on TCP port 7801.
 
+For one duck, `up` opens a native MuJoCo control window. Click it and hold the arrows to drive
+forward/back or turn; releasing them, pressing Space, or leaving the window stops the keyboard
+intent. R resets upright in the same mode. The reset stops and relaxes `robotd` first so it
+forgets the old policy episode, resets body and passive-joint motion, then enables the balancing
+policy from a steadied home pose. It preserves the services, account and installed skills.
+The overlay shows mode, connection, control-loop rate, balance and keyboard commands. Drag to
+orbit and scroll to zoom. Set `DUCK_SIM_CONTROLS=0` for the original passive viewer; headless
+and multi-duck runs keep their original behavior. On macOS the native window uses a generated
+application bundle under the state directory so GLFW can own the main thread; it retains the
+RL venv's interpreter and packages. Physics runs independently of visible-frame rendering.
+
 For one duck on roller skates, use `DUCK_SIM_MODE=roller scripts/duck-sim up`. This selects
 the roller scene, `HOME` placement, skating gait and crouch policy together. It needs the RL
 body server's roller BAM motor support. The body is steadied through the startup home ramp,
@@ -175,6 +186,7 @@ Environment variables, all optional:
 | `DUCK_SIM_DUCK` | `duck-a` | Which duck `ctl` and `monitor` talk to. |
 | `DUCK_SIM_KEYFRAME` | `SIT` | Where a duck starts: `SIT` folded on the floor (the standing policy rises from it), `HOME`, `STAND`, `FOLD`. |
 | `DUCK_SIM_VIEWER` | `1` | `0` runs MuJoCo headless. |
+| `DUCK_SIM_CONTROLS` | `1` | Native keyboard controls for single-duck `up`; `0` uses the passive viewer. |
 | `DUCK_SIM_PORT` | `7801` | The first duck's body port; +1 per duck. |
 | `DUCK_SIM_FRAME_PORT` | `7901` | The first camera's frame port; +1 per camera. |
 
