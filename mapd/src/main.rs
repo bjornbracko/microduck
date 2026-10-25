@@ -92,7 +92,8 @@ async fn run(args: Args) -> Result<()> {
             path,
             Duration::from_secs(params.autosave_s.max(5)),
             shared.clone(),
-        );
+        )
+        .context("loading the saved map")?;
         worker_thread = Some(
             std::thread::Builder::new()
                 .name("map-worker".to_owned())

@@ -10,6 +10,7 @@
 //! to `<name>.bad-<seconds>` and said so in the journal, and the new map starts beside it; the old
 //! one is still there for whoever wants to know what happened.
 
+use std::io;
 use std::path::{Path, PathBuf};
 
 use maploc::mapper::{SESSION_VERSION, Session};
@@ -25,10 +26,11 @@ pub enum Loaded {
     SetAside { reason: String, moved_to: PathBuf },
 }
 
-pub fn load(path: &Path) -> Loaded {
+/// A failed backup is an error: the caller must not start a new map at this path.
+pub fn load(path: &Path) -> io::Result<Loaded> {
     let bytes = match std::fs::read(path) {
         Ok(b) => b,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Loaded::Nothing,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Loaded::Nothing),
         Err(e) => return set_aside(path, format!("unreadable: {e}")),
     };
     // The version first, on its own: a map from a newer or older format must be named as such,
@@ -65,28 +67,32 @@ pub fn load(path: &Path) -> Loaded {
             {
                 return set_aside(path, "an edge names a node that does not exist".into());
             }
-            Loaded::Map(Box::new(s))
+            Ok(Loaded::Map(Box::new(s)))
         }
         Err(e) => set_aside(path, format!("not a map: {e}")),
     }
 }
 
-fn set_aside(path: &Path, reason: String) -> Loaded {
+fn set_aside(path: &Path, reason: String) -> io::Result<Loaded> {
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs());
     let mut moved_to = path.as_os_str().to_owned();
     moved_to.push(format!(".bad-{secs}"));
     let moved_to = PathBuf::from(moved_to);
-    if let Err(e) = std::fs::rename(path, &moved_to) {
-        // Could not even move it: say so, and still do not overwrite it — the caller saves to
-        // the same path, so refuse by reporting the original location.
-        return Loaded::SetAside {
-            reason: format!("{reason}; and moving it aside failed: {e}"),
-            moved_to: path.to_owned(),
-        };
-    }
-    Loaded::SetAside { reason, moved_to }
+    // A new worker saves to the original path. It must not start unless the old
+    // file was actually preserved, including when the backup itself is unwritable.
+    std::fs::rename(path, &moved_to).map_err(|e| {
+        io::Error::new(
+            e.kind(),
+            format!(
+                "{reason}; moving {} aside to {} failed: {e}; refusing to overwrite the saved map",
+                path.display(),
+                moved_to.display()
+            ),
+        )
+    })?;
+    Ok(Loaded::SetAside { reason, moved_to })
 }
 
 /// Replace the file with `session`, atomically.
@@ -162,7 +168,7 @@ mod tests {
         let path = dir.path().join("map.json");
         let session = Mapper::new(MapperConfig::default()).session();
         save(&path, &session).unwrap();
-        match load(&path) {
+        match load(&path).unwrap() {
             Loaded::Map(s) => assert_eq!(*s, session),
             other => panic!("{other:?}"),
         }
@@ -175,7 +181,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("map.json");
         std::fs::write(&path, br#"{"version": 99, "keyframes": []}"#).unwrap();
-        let Loaded::SetAside { moved_to, reason } = load(&path) else {
+        let Loaded::SetAside { moved_to, reason } = load(&path).unwrap() else {
             panic!("a future format was loaded");
         };
         assert!(reason.contains("format"), "{reason}");
@@ -193,7 +199,7 @@ mod tests {
     fn no_file_is_nothing_not_an_error() {
         let dir = tempfile::tempdir().unwrap();
         assert!(matches!(
-            load(&dir.path().join("map.json")),
+            load(&dir.path().join("map.json")).unwrap(),
             Loaded::Nothing
         ));
     }

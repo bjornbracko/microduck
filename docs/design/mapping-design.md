@@ -212,6 +212,8 @@ boot hint is close), and on shutdown. Written atomically.
 **A file `mapd` cannot read is set aside, never overwritten**: renamed to `map.json.bad-<seconds>`
 and named in the journal, and a new map starts beside it. The first maploc started fresh on any read
 error and its next autosave replaced the file — a format bump destroyed hours of mapping silently.
+If the backup rename fails, `mapd` reports the error and stops before starting its worker. Fix the
+backup failure or preserve the old file manually before restarting; no new map is saved over it.
 
 The occupancy grid is **derived**: rendered from the keyframes at their current poses whenever it is
 asked for, so it cannot disagree with the graph after a loop closure.

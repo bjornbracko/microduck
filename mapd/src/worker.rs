@@ -98,8 +98,8 @@ impl Worker {
         path: PathBuf,
         autosave: Duration,
         shared: Arc<Mutex<Shared>>,
-    ) -> Self {
-        let mapper = match store::load(&path) {
+    ) -> std::io::Result<Self> {
+        let mapper = match store::load(&path)? {
             store::Loaded::Map(s) => {
                 tracing::info!(path = %path.display(), keyframes = s.keyframes.len(), "resuming the saved map; lost until a stop recognises it");
                 Mapper::resume(cfg.clone(), *s)
@@ -126,7 +126,7 @@ impl Worker {
             relocalizations: 0,
         };
         w.publish();
-        w
+        Ok(w)
     }
 
     pub fn run(mut self, rx: Receiver<Input>) {
@@ -310,6 +310,39 @@ impl Worker {
                 .collect(),
             pose: self.mapper.pose().map(to_pose),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A backup failure must not give a fresh worker permission to replace the old map.
+    #[test]
+    fn a_map_that_cannot_be_backed_up_is_never_overwritten() {
+        let dir = tempfile::tempdir().unwrap();
+        // On our Linux/macOS filesystems .tmp still fits the 255-byte name limit,
+        // but .bad-<seconds> does not. Saving is possible; preserving is not.
+        let path = dir.path().join("m".repeat(250));
+        store::save(&path, &Mapper::new(MapperConfig::default()).session()).unwrap();
+        let original = br#"{"version": 999, "important_existing_map": true}"#;
+        std::fs::write(&path, original).unwrap();
+        let result = Worker::new(
+            MapperConfig::default(),
+            path.clone(),
+            Duration::from_secs(5),
+            Arc::new(Mutex::new(Shared::default())),
+        );
+        let error = match result {
+            Ok(_) => panic!("a worker was allowed to overwrite an unpreserved map"),
+            Err(error) => error,
+        };
+        assert!(
+            error.to_string().contains("refusing to overwrite"),
+            "{error}"
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        assert!(!dir.path().join(format!("{}.tmp", "m".repeat(250))).exists());
     }
 }
 

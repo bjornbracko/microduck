@@ -175,7 +175,8 @@ mod tests {
             map_path.clone(),
             Duration::from_secs(3600),
             shared.clone(),
-        );
+        )
+        .unwrap();
         let worker_thread = std::thread::spawn(move || worker.run(rx));
 
         // Drive a short walk with stops straight into the worker's channel.
