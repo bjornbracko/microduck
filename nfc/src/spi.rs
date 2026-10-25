@@ -46,6 +46,25 @@ impl Bus for Spidev {
     }
 }
 
+#[cfg(all(test, not(target_os = "linux")))]
+mod host_tests {
+    use super::*;
+
+    /// Development hosts need the daemon's driver type even though they have no Linux SPI bus.
+    #[test]
+    fn a_non_linux_host_reports_unsupported_spi_without_opening_a_device() {
+        let error = Spidev::open(std::path::Path::new("/dev/spidev1.0"))
+            .err()
+            .expect("a non-Linux host must not claim to open the Linux SPI bus");
+        assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+        let mut bus = Spidev;
+        assert_eq!(
+            bus.transfer(&[], &mut []).unwrap_err().kind(),
+            io::ErrorKind::Unsupported
+        );
+    }
+}
+
 #[cfg(target_os = "linux")]
 mod ioctl {
     // From linux/spi/spidev.h: `_IOW('k', nr, type)` = 0x40000000 | size << 16 | 'k' << 8 | nr.
